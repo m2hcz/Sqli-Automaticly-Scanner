@@ -481,11 +481,7 @@ async function testXSS(base, ep, param, findings, baseline, log) {
 async function testOpenRedirect(base, ep, param, findings, log) {
   if (!REDIRECT_PARAM_NAMES.test(param)) return;
   const values = [
-    "https://example.com/evil",
-    "//example.com/evil",
-    "https:%2f%2fexample.com%2fevil",
-    "https://example.com%2fevil",
-    "http://example.com/evil?x=1#y"
+    "https://example.com/evil", # put here yours to test
   ];
   for (const evil of values) {
     const req = buildRequest(base, ep, param, evil);
